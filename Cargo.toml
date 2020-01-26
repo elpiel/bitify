@@ -1,0 +1,9 @@
+[package]
+name = "bitify"
+version = "0.1.0"
+authors = ["Lachezar Lechev <elpiel93@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+nom = "5.1.0"
+bitvec = "0.17.2"
