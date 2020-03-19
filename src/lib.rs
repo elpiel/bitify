@@ -1,9 +1,23 @@
+#![deny(clippy::all)]
 use bitvec::prelude::*;
-use nom::{error::ErrorKind, Err as NomErr, IResult, Needed};
 use std::cell::RefCell;
 
-pub type BResult<O> = Result<O, NomErr<ErrorKind>>;
+pub type Result<O> = std::result::Result<O, Error>;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Needed {
+    /// needs more data, but we do not know how much
+    // Unknown,
+    /// contains the required data size
+    Size(usize),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    Incomplete(Needed),
+}
+
+#[derive(Debug)]
 pub enum Order {
     MSBit,
     LSBit,
@@ -20,12 +34,12 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn load(&self, input: &BitSlice<Msb0, u8>) -> IResult<BitVec<Msb0, u8>, FixedSize> {
+    pub fn load(&self, input: &BitSlice<Msb0, u8>) -> Result<(BitVec<Msb0, u8>, FixedSize)> {
         let bitvec = BitVec::from(input);
 
         // if size > passed input, we need to fail!
         match self.size.checked_sub(bitvec.len()) {
-            Some(needed) if needed > 0 => return Err(NomErr::Incomplete(Needed::Size(needed))),
+            Some(needed) if needed > 0 => return Err(Error::Incomplete(Needed::Size(needed))),
             _ => {}
         };
 
@@ -40,17 +54,17 @@ impl Builder {
 }
 
 impl FixedSize {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(size: usize) -> Builder {
         Builder { size }
     }
 
     // @IDEA: Create a `fn drain`
 
-    pub fn take_byte(&self, order: Order) -> BResult<u8> {
-        // @TODO: Own error! This returns how many Bits are still needed, this is not enough verbose
+    pub fn take_byte(&self, order: Order) -> Result<u8> {
         // if 8 bits > data length, we need to fail!
         match 8_usize.checked_sub(self.data.borrow().len()) {
-            Some(needed) if needed > 0 => return Err(NomErr::Incomplete(Needed::Size(needed))),
+            Some(needed) if needed > 0 => return Err(Error::Incomplete(Needed::Size(needed))),
             _ => {}
         };
 
@@ -73,13 +87,13 @@ impl FixedSize {
         Ok(byte)
     }
 
-    pub fn take_bytes(&self, order: Order, bytes: u8) -> BResult<Vec<u8>> {
+    pub fn take_bytes(&self, order: Order, bytes: u8) -> Result<Vec<u8>> {
         // MAX value is 2040 which is way less than a usize
         let bits_count: usize = usize::from(bytes) * 8;
         // @TODO: Own error! This returns how many Bits are still needed, this is not enough verbose
         // if 8 bits * num of bytes > data length, we need to fail!
         match bits_count.checked_sub(self.data.borrow().len()) {
-            Some(needed) if needed > 0 => return Err(NomErr::Incomplete(Needed::Size(needed))),
+            Some(needed) if needed > 0 => return Err(Error::Incomplete(Needed::Size(needed))),
             _ => {}
         };
 
@@ -96,9 +110,9 @@ impl FixedSize {
         Ok(bytes)
     }
 
-    pub fn take_bit<T: BitStore>(&self) -> BResult<T> {
+    pub fn take_bit<T: BitStore>(&self) -> Result<T> {
         match 1_usize.checked_sub(self.data.borrow().len()) {
-            Some(needed) if needed > 0 => return Err(NomErr::Incomplete(Needed::Size(needed))),
+            Some(needed) if needed > 0 => return Err(Error::Incomplete(Needed::Size(needed))),
             _ => {}
         };
 
@@ -153,8 +167,8 @@ mod test {
             .load(bitvec.as_bitslice())
             .expect_err("Should fail as we are passing less bits than needed");
 
-        assert_ne!(NomErr::Incomplete(Needed::Size(10)), incomplete_err);
-        assert_eq!(NomErr::Incomplete(Needed::Size(22)), incomplete_err);
+        assert_ne!(Error::Incomplete(Needed::Size(10)), incomplete_err);
+        assert_eq!(Error::Incomplete(Needed::Size(22)), incomplete_err);
     }
 
     #[test]
