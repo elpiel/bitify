@@ -15,6 +15,8 @@ pub enum Needed {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     Incomplete(Needed),
+    /// when we are receiving more bits that we can parse
+    OutOfBound,
 }
 
 #[derive(Debug)]
@@ -34,28 +36,27 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn load(&self, input: &BitSlice<Msb0, u8>) -> Result<(BitVec<Msb0, u8>, FixedSize)> {
-        let bitvec = BitVec::from(input);
+    pub fn load<'a>(&self, input: &'a BitSlice<Msb0, u8>) -> Result<(&'a BitSlice<Msb0, u8>, FixedSize)> {
+        // let bitvec = BitVec::from(input);
 
         // if size > passed input, we need to fail!
-        match self.size.checked_sub(bitvec.len()) {
+        match self.size.checked_sub(input.len()) {
             Some(needed) if needed > 0 => return Err(Error::Incomplete(Needed::Size(needed))),
             _ => {}
         };
 
-        let (fixed_size_data, remaining) = bitvec.split_at(self.size);
+        let (fixed_size_data, remaining) = input.split_at(self.size);
 
         let fixed_size = FixedSize {
             size: self.size,
             data: RefCell::new(fixed_size_data.to_owned()),
         };
-        Ok((remaining.to_vec(), fixed_size))
+        Ok((remaining, fixed_size))
     }
 }
 
 impl FixedSize {
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(size: usize) -> Builder {
+    pub fn builder(size: usize) -> Builder {
         Builder { size }
     }
 
@@ -90,7 +91,6 @@ impl FixedSize {
     pub fn take_bytes(&self, order: Order, bytes: u8) -> Result<Vec<u8>> {
         // MAX value is 2040 which is way less than a usize
         let bits_count: usize = usize::from(bytes) * 8;
-        // @TODO: Own error! This returns how many Bits are still needed, this is not enough verbose
         // if 8 bits * num of bytes > data length, we need to fail!
         match bits_count.checked_sub(self.data.borrow().len()) {
             Some(needed) if needed > 0 => return Err(Error::Incomplete(Needed::Size(needed))),
@@ -119,21 +119,46 @@ impl FixedSize {
         let bit: BitVec<Msb0, u8> = self.data.borrow_mut().drain(0..1).collect();
         Ok(bit.load_be::<T>())
     }
+
+    pub fn take_bits<T: BitStore>(&self, order: Order, bits: usize) -> Result<T> {
+        self.check_needed(bits)?;
+
+        let mut data = self.data.borrow_mut();
+        let drain = data.drain(0..bits);
+
+         // we need to collect it into a BitVec. since Drain doesn't impl BitField
+         let bits = match order {
+            Order::MSBit => drain.collect::<BitVec<Msb0, u8>>(),
+            // @TODO:check if this is correct for both Big-endian and Little-endian
+            Order::LSBit => drain.rev().collect::<BitVec<Msb0, u8>>(),
+        };
+
+        Ok(bits.load_be::<T>())
+    }
+
+    fn check_needed(&self, needed_bits: usize) -> Result<()> {
+        match needed_bits.checked_sub(self.data.borrow().len()) {
+            Some(needed) if needed > 0 => Err(Error::Incomplete(Needed::Size(needed))),
+            _ => Ok(())
+        }
+    }
 }
+
+
 
 #[cfg(test)]
 mod test {
     use super::*;
     #[test]
     fn create_fixed_size_builder() {
-        let builder = FixedSize::new(32);
+        let builder = FixedSize::builder(32);
 
         assert_eq!(32, builder.size);
     }
 
     #[test]
     fn builder_load_more_than_size_should_succeed() {
-        let builder = FixedSize::new(32);
+        let builder = FixedSize::builder(32);
         let bitvec = bitvec![Msb0, u8; 1; 33];
 
         let (remaining, fixed_size) = builder
@@ -147,7 +172,7 @@ mod test {
 
     #[test]
     fn builder_load_exact_size_should_succeed() {
-        let builder = FixedSize::new(32);
+        let builder = FixedSize::builder(32);
         let bitvec = bitvec![Msb0, u8; 1; 32];
 
         let (remaining, fixed_size) = builder
@@ -160,7 +185,7 @@ mod test {
 
     #[test]
     fn builder_fails_to_load_since_it_needs_more_bits() {
-        let builder = FixedSize::new(32);
+        let builder = FixedSize::builder(32);
         let bitvec = bitvec![Msb0, u8; 1; 10];
 
         let incomplete_err = builder
@@ -178,7 +203,7 @@ mod test {
         bitvec.push(true);
         bitvec.push(false);
 
-        let builder = FixedSize::new(10);
+        let builder = FixedSize::builder(10);
         let (remaining, fixed_size) = builder.load(&bitvec).expect("We should have 10 bits now");
 
         assert!(remaining.is_empty());
@@ -198,7 +223,7 @@ mod test {
         bitvec.push(true);
         bitvec.push(false);
 
-        let builder = FixedSize::new(10);
+        let builder = FixedSize::builder(10);
         let (remaining, fixed_size) = builder.load(&bitvec).expect("We should have 10 bits now");
 
         assert!(remaining.is_empty());
@@ -218,7 +243,7 @@ mod test {
         bitvec.append(&mut BitVec::<Msb0, u8>::from_slice(&bytes));
         bitvec.push(true);
 
-        let builder = FixedSize::new(18);
+        let builder = FixedSize::builder(18);
         let (remaining, fixed_size) = builder
             .load(&bitvec)
             .expect("We should have exactly 18 bits inside");
@@ -245,7 +270,7 @@ mod test {
         bitvec.append(&mut BitVec::<Msb0, u8>::from_slice(&bytes));
         bitvec.push(true);
 
-        let builder = FixedSize::new(18);
+        let builder = FixedSize::builder(18);
         let (remaining, fixed_size) = builder
             .load(&bitvec)
             .expect("We should have exactly 18 bits inside");

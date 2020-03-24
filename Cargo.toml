@@ -5,4 +5,4 @@ authors = ["Lachezar Lechev <elpiel93@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-bitvec = "0.17"
+bitvec = { version = "0.17", features = [ "alloc", "atomic"]}
