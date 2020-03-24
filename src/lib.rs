@@ -4,6 +4,8 @@ use std::cell::RefCell;
 
 pub type Result<O> = std::result::Result<O, Error>;
 
+pub type Input = BitSlice<Msb0, u8>;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Needed {
     /// needs more data, but we do not know how much
@@ -17,6 +19,7 @@ pub enum Error {
     Incomplete(Needed),
     /// when we are receiving more bits that we can parse
     OutOfBound,
+    NotSane,
 }
 
 #[derive(Debug)]
@@ -36,9 +39,18 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn load<'a>(&self, input: &'a BitSlice<Msb0, u8>) -> Result<(&'a BitSlice<Msb0, u8>, FixedSize)> {
-        // let bitvec = BitVec::from(input);
+    pub fn load<'a>(&self, input: &'a Input) -> Result<(&'a Input, FixedSize)> {
+        self.load_sane(input, |_| true)
+    }
 
+    pub fn load_sane<'a, T>(
+        &self,
+        input: &'a Input,
+        check_sane: T,
+    ) -> Result<(&'a Input, FixedSize)>
+    where
+        T: Fn(&'a Input) -> bool,
+    {
         // if size > passed input, we need to fail!
         match self.size.checked_sub(input.len()) {
             Some(needed) if needed > 0 => return Err(Error::Incomplete(Needed::Size(needed))),
@@ -46,6 +58,10 @@ impl Builder {
         };
 
         let (fixed_size_data, remaining) = input.split_at(self.size);
+
+        if !check_sane(fixed_size_data) {
+            return Err(Error::NotSane);
+        }
 
         let fixed_size = FixedSize {
             size: self.size,
@@ -126,8 +142,8 @@ impl FixedSize {
         let mut data = self.data.borrow_mut();
         let drain = data.drain(0..bits);
 
-         // we need to collect it into a BitVec. since Drain doesn't impl BitField
-         let bits = match order {
+        // we need to collect it into a BitVec. since Drain doesn't impl BitField
+        let bits = match order {
             Order::MSBit => drain.collect::<BitVec<Msb0, u8>>(),
             // @TODO:check if this is correct for both Big-endian and Little-endian
             Order::LSBit => drain.rev().collect::<BitVec<Msb0, u8>>(),
@@ -139,12 +155,10 @@ impl FixedSize {
     fn check_needed(&self, needed_bits: usize) -> Result<()> {
         match needed_bits.checked_sub(self.data.borrow().len()) {
             Some(needed) if needed > 0 => Err(Error::Incomplete(Needed::Size(needed))),
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod test {
